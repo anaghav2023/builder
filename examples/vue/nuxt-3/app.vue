@@ -8,7 +8,7 @@
         {{ content?.data?.title || 'Unpublished' }}
       </div>
       <Content
-        model="page"
+        model="symbol"
         :content="content"
         :api-key="BUILDER_PUBLIC_API_KEY"
         :customComponents="REGISTERED_COMPONENTS"
@@ -40,14 +40,14 @@ const REGISTERED_COMPONENTS = [
 ];
 
 // TODO: enter your public API key
-const BUILDER_PUBLIC_API_KEY = 'f1a790f8c3204b3b8c5c1795aeac4660'; // ggignore
+const BUILDER_PUBLIC_API_KEY = '3f3ebbcc055e4b3dbf539daa67c4a45e'; // ggignore
 
 const route = useRoute();
 
 // fetch builder content data
 const { data: content } = await useAsyncData(`builderData-page-${route.path}`, () =>
   fetchOneEntry({
-    model: 'page',
+    model: 'symbol',
     apiKey: BUILDER_PUBLIC_API_KEY,
     userAttributes: {
       urlPath: route.path,

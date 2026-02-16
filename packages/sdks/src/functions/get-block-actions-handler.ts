@@ -1,7 +1,7 @@
 import type { BuilderContextInterface } from '../context/types.js';
 import type { BuilderBlock } from '../types/builder-block.js';
-import { evaluate } from './evaluate/index.js';
 import type { TrackingContext } from './evaluate/helpers.js';
+import { evaluate } from './evaluate/index.js';
 
 type Options = {
   block: BuilderBlock;

@@ -561,31 +561,42 @@ export class SmartlingApi {
               const localJob = await this.createLocalJobWithSymbols(jobName, [variantContent]);
 
               // Store variant metadata and auto-populate jobDetails with variant's target locales
-              const jobDraft = await appState.getLatestDraft(localJob.id);
-              jobDraft.data = jobDraft.data || {};
-              jobDraft.data.variantMetadata = variantContent.variantMetadata;
+              const latestDraft = await appState.getLatestDraft(localJob.id);
 
-              // Auto-populate jobDetails with variant's target locales and project
-              jobDraft.data.jobDetails = jobDraft.data.jobDetails || {};
+              // Prepare jobDetails with variant's target locales and project
+              const updatedJobDetails: any = {
+                ...(latestDraft.data?.jobDetails || {}),
+              };
 
               // Set target locales from variant
               if (variant.targetLocales && variant.targetLocales.length > 0) {
-                jobDraft.data.jobDetails.targetLocales = variant.targetLocales;
+                updatedJobDetails.targetLocales = variant.targetLocales;
               }
 
               // Set project from jobDetails or get default from plugin settings
               if (jobDetails?.project) {
-                jobDraft.data.jobDetails.project = jobDetails.project;
+                updatedJobDetails.project = jobDetails.project;
               } else {
                 // Get default project from plugin settings
                 const pluginSettings = appState.user.organization?.value?.settings?.plugins?.get(pkg.name);
                 const defaultProjectId = pluginSettings?.get('defaultProjectId');
                 if (defaultProjectId) {
-                  jobDraft.data.jobDetails.project = defaultProjectId;
+                  updatedJobDetails.project = defaultProjectId;
                 }
               }
 
-              await appState.updateLatestDraft(jobDraft);
+              // Create updated draft with variant metadata and isVariantJob flag
+              const updatedDraft = {
+                ...latestDraft,
+                data: {
+                  ...latestDraft.data,
+                  isVariantJob: true,  // Mark this as a variant job for the webhook handler
+                  variantMetadata: variantContent.variantMetadata,
+                  jobDetails: updatedJobDetails,
+                },
+              };
+
+              await appState.updateLatestDraft(updatedDraft);
 
               createdJobs.push({
                 variantIndex: variant.index,

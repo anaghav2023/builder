@@ -2,6 +2,7 @@ import pkg from '../package.json';
 import appState from '@builder.io/app-context';
 import { getTranslationModel } from './model-template';
 import { action } from 'mobx';
+import { generateVariantJobName } from './variant-utils';
 
 export type Project = {
   targetLocales: Array<{ enabled: boolean; localeId: string; description: string }>;
@@ -487,7 +488,98 @@ export class SmartlingApi {
            
            return false; // No cleanup needed or cleanup failed
          }
-         
+
+         /**
+          * Create separate translation jobs for each variant in PersonalizationContainer
+          * Each variant gets its own job with the locales specified in its targeting query
+          */
+         async createVariantTranslationJobs(
+           contentId: string,
+           variants: Array<{
+             index: number;
+             name?: string;
+             targetLocales: string[];
+             blocks: any[];
+             originalContent?: any;
+           }>,
+           jobDetails?: any
+         ): Promise<Array<{ variantIndex: number; jobId: string; jobName: string }>> {
+           const translationModel = getTranslationModel();
+           const createdJobs: Array<{ variantIndex: number; jobId: string; jobName: string }> = [];
+
+           for (const variant of variants) {
+             try {
+               // Generate job name for this variant
+               const jobName = generateVariantJobName(contentId, variant.name, variant.index);
+
+               // Create variant-specific content
+               const variantContent = {
+                 id: variant.originalContent?.id || contentId,
+                 modelName: variant.originalContent?.modelName || 'page',
+                 previewUrl: variant.originalContent?.previewUrl || variant.originalContent?.meta?.get?.('lastPreviewUrl'),
+                 blocks: variant.blocks,
+                 variantMetadata: {
+                   originalContentId: contentId,
+                   variantIndex: variant.index,
+                   variantName: variant.name,
+                   targetLocales: variant.targetLocales,
+                 },
+               };
+
+               // Try v2 Batch API first if available
+               if (this.apiVersion === 'v2' && jobDetails) {
+                 try {
+                   const batchRequest: BatchTranslationRequest = {
+                     name: jobName,
+                     description: `Variant: ${variant.name || `Variant ${variant.index}`}`,
+                     projectId: jobDetails.project,
+                     targetLocales: variant.targetLocales && variant.targetLocales.length > 0
+                       ? variant.targetLocales
+                       : jobDetails.targetLocales || [],
+                     contentEntries: [
+                       {
+                         content: { id: contentId, model: 'page' },
+                         preview: variantContent.previewUrl,
+                         instruction: `Variant: ${variant.name || `index ${variant.index}`}`,
+                       },
+                     ],
+                   };
+
+                   const batchJob = await this.createBatchTranslation(batchRequest);
+                   createdJobs.push({
+                     variantIndex: variant.index,
+                     jobId: batchJob.id,
+                     jobName,
+                   });
+                   continue;
+                 } catch (error) {
+                   // Fall through to v1 local job creation
+                 }
+               }
+
+               // Fallback to v1 local job creation
+               const localJob = await this.createLocalJobWithSymbols(jobName, [variantContent]);
+
+               // Store variant metadata in the job
+               const jobDraft = await appState.getLatestDraft(localJob.id);
+               jobDraft.data = jobDraft.data || {};
+               jobDraft.data.variantMetadata = variantContent.variantMetadata;
+               await appState.updateLatestDraft(jobDraft);
+
+               createdJobs.push({
+                 variantIndex: variant.index,
+                 jobId: localJob.id,
+                 jobName,
+               });
+             } catch (error) {
+               console.error(`Failed to create translation job for variant ${variant.index}:`, error);
+               // Continue with other variants even if one fails
+             }
+           }
+
+           return createdJobs;
+         }
+
        }
 
 function getContentReference(content: any) {

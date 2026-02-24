@@ -24,6 +24,11 @@ import React from 'react';
 import { getTranslateableFields } from '@builder.io/utils';
 import hash from 'object-hash';
 import stringify from 'fast-json-stable-stringify';
+import {
+  detectPersonalizationContainers,
+  generateVariantJobName,
+  extractTargetLocalesFromQuery,
+} from './variant-utils';
 // translation status that indicate the content is being queued for translations
 const enabledTranslationStatuses = ['pending', 'local'];
 
@@ -71,6 +76,59 @@ async function isContentInActiveTranslationJob(content: any, api: SmartlingApi):
 // Utility function to clear job existence cache (useful for testing/debugging)
 function clearJobExistenceCache(): void {
   jobExistenceCache.clear();
+}
+
+// Helper function to handle variant job creation
+async function handleVariantJobCreation(
+  contentItems: any[],
+  jobDetails?: any
+): Promise<Array<{ jobId: string; jobName: string; contentId: string }>> {
+  const createdJobs: Array<{ jobId: string; jobName: string; contentId: string }> = [];
+
+  for (const content of contentItems) {
+    // Check if content has PersonalizationContainers
+    const containers = await detectPersonalizationContainers(content, appState.user.apiKey);
+
+    if (containers.length === 0) {
+      // No variants found, skip (will be handled by regular job creation flow)
+      continue;
+    }
+
+    // Process each container's variants
+    for (const container of containers) {
+      // Prepare variant data for createVariantTranslationJobs
+      const variantsForJob = container.variants.map((variant) => ({
+        index: variant.index,
+        name: variant.name,
+        targetLocales: variant.targetLocales,
+        blocks: variant.blocks,
+        originalContent: content,
+      }));
+
+      try {
+        // Create variant jobs
+        const variantJobs = await api.createVariantTranslationJobs(
+          content.id,
+          variantsForJob,
+          jobDetails
+        );
+
+        // Collect created jobs
+        variantJobs.forEach((job) => {
+          createdJobs.push({
+            jobId: job.jobId,
+            jobName: job.jobName,
+            contentId: content.id,
+          });
+        });
+      } catch (error) {
+        console.error('Failed to create variant translation jobs:', error);
+        throw error;
+      }
+    }
+  }
+
+  return createdJobs;
 }
 
 
@@ -389,73 +447,106 @@ const initializeSmartlingPlugin = async () => {
         return appState.user.can('publish') && !hasActiveTranslationPending;
       },
       async onClick(actions, selectedContentIds, contentEntries) {
-        let translationJobId = await pickTranslationJob();
         const selectedContent = selectedContentIds.map(id =>
           contentEntries.find(entry => entry.id === id)
         );
-        
+
         const filteredContent = selectedContent.filter(content => content);
-        if (translationJobId === null) {
-          const name = await appState.dialogs.prompt({
-            placeholderText: 'Enter a name for your new job',
-          });
-          if (name) {
-            // Use enhanced job creation that supports both v1 and v2
-            const localJob = await api.createTranslationJob(name, filteredContent);
-            translationJobId = localJob.id;
-          }
-        } else if (translationJobId) {
-          // adding content to an already created job
-          await api.updateBatchTranslation(translationJobId, filteredContent);
-          
-          // For changed content that was previously published, update translation files in Smartling
-          const changedPublishedContent = filteredContent.filter(entry => {
-            const translationRevision = entry.meta?.get('translationRevision');
-            const translationRevisionLatest = entry.meta?.get('translationRevisionLatest');
-            return entry.published === 'published' && 
-                   translationRevision && translationRevisionLatest && 
-                   translationRevision !== translationRevisionLatest;
-          });
-          
-          if (changedPublishedContent.length > 0) {
-            await Promise.all(changedPublishedContent.map(async (entry) => {
-              try {
-                await api.updateTranslationFile({
-                  translationJobId,
-                  translationModel: getTranslationModel().name,
-                  contentId: entry.id,
-                  contentModel: appState.designerState.editingModel?.name || 'page',
-                  preview: entry.meta?.get?.('lastPreviewUrl') || entry.meta?.lastPreviewUrl,
-                });
-              } catch (error) {
-              }
-            }));
+
+        // Check if any content has PersonalizationContainer variants
+        const contentWithVariants = filteredContent.filter(content => detectPersonalizationContainers(content).length > 0);
+        const contentWithoutVariants = filteredContent.filter(content => detectPersonalizationContainers(content).length === 0);
+
+        let createdJobIds: string[] = [];
+
+        // Handle content with variants
+        if (contentWithVariants.length > 0) {
+          try {
+            const variantJobs = await handleVariantJobCreation(contentWithVariants);
+            createdJobIds = variantJobs.map(job => job.jobId);
+
+            // Show notification for variant jobs
+            if (variantJobs.length > 0) {
+              appState.snackBar.show(`Created ${variantJobs.length} translation job(s) for variant(s)`);
+            }
+          } catch (error) {
+            appState.snackBar.show('Failed to create variant translation jobs');
+            console.error('Variant job creation error:', error);
           }
         }
-        await Promise.all(
-          filteredContent.map(entry => {
-            const metaUpdates: any = {
-              ...fastClone(entry.meta),
-              translationStatus: 'local',
-              translationJobId,
-            };
-            
-            // If content has changes (different revisions), update revision to latest
-            const translationRevision = entry.meta?.get('translationRevision');
-            const translationRevisionLatest = entry.meta?.get('translationRevisionLatest');
-            if (translationRevision && translationRevisionLatest && translationRevision !== translationRevisionLatest) {
-              metaUpdates.translationRevision = translationRevisionLatest;
-            }
-            
-            return appState.updateLatestDraft({
-              id: entry.id,
-              modelId: entry.modelId,
-              meta: metaUpdates,
+
+        // Handle content without variants (use original flow)
+        if (contentWithoutVariants.length > 0) {
+          let translationJobId = await pickTranslationJob();
+
+          if (translationJobId === null) {
+            const name = await appState.dialogs.prompt({
+              placeholderText: 'Enter a name for your new job',
             });
-          })
-        );
+            if (name) {
+              // Use enhanced job creation that supports both v1 and v2
+              const localJob = await api.createTranslationJob(name, contentWithoutVariants);
+              translationJobId = localJob.id;
+            }
+          } else if (translationJobId) {
+            // adding content to an already created job
+            await api.updateBatchTranslation(translationJobId, contentWithoutVariants);
+
+            // For changed content that was previously published, update translation files in Smartling
+            const changedPublishedContent = contentWithoutVariants.filter(entry => {
+              const translationRevision = entry.meta?.get('translationRevision');
+              const translationRevisionLatest = entry.meta?.get('translationRevisionLatest');
+              return entry.published === 'published' &&
+                     translationRevision && translationRevisionLatest &&
+                     translationRevision !== translationRevisionLatest;
+            });
+
+            if (changedPublishedContent.length > 0) {
+              await Promise.all(changedPublishedContent.map(async (entry) => {
+                try {
+                  await api.updateTranslationFile({
+                    translationJobId,
+                    translationModel: getTranslationModel().name,
+                    contentId: entry.id,
+                    contentModel: appState.designerState.editingModel?.name || 'page',
+                    preview: entry.meta?.get?.('lastPreviewUrl') || entry.meta?.lastPreviewUrl,
+                  });
+                } catch (error) {
+                }
+              }));
+            }
+          }
+
+          if (translationJobId) {
+            createdJobIds.push(translationJobId);
+
+            await Promise.all(
+              contentWithoutVariants.map(entry => {
+                const metaUpdates: any = {
+                  ...fastClone(entry.meta),
+                  translationStatus: 'local',
+                  translationJobId,
+                };
+
+                // If content has changes (different revisions), update revision to latest
+                const translationRevision = entry.meta?.get('translationRevision');
+                const translationRevisionLatest = entry.meta?.get('translationRevisionLatest');
+                if (translationRevision && translationRevisionLatest && translationRevision !== translationRevisionLatest) {
+                  metaUpdates.translationRevision = translationRevisionLatest;
+                }
+
+                return appState.updateLatestDraft({
+                  id: entry.id,
+                  modelId: entry.modelId,
+                  meta: metaUpdates,
+                });
+              })
+            );
+            showJobNotification(translationJobId);
+          }
+        }
+
         actions.refreshList();
-        showJobNotification(translationJobId);
       },
     });
     const transcludedMetaKey = 'excludeFromTranslation';
@@ -623,14 +714,34 @@ const initializeSmartlingPlugin = async () => {
           appState.snackBar.show('Please configure the Smartling plugin in the plugins section first.');
           return;
         }
-        
+
         // If there are unsaved changes, wait for auto-save to complete
         if (appState.designerState.hasUnsavedChanges()) {
           // Give a moment for auto-save to complete and update metadata
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        
-        
+
+        // Check if content has PersonalizationContainer variants
+        const containers = await detectPersonalizationContainers(content, appState.user.apiKey);
+        console.log('log1', containers)
+
+        if (containers.length > 0) {
+          // Handle variant job creation for this single content item
+          try {
+            const variantJobs = await handleVariantJobCreation([content]);
+
+            if (variantJobs.length > 0) {
+              appState.snackBar.show(`Created ${variantJobs.length} translation job(s) for variant(s)`);
+            }
+            return;
+          } catch (error) {
+            appState.snackBar.show('Failed to create variant translation jobs');
+            console.error('Variant job creation error:', error);
+            return;
+          }
+        }
+
+        // Handle regular content without variants
         let translationJobId = await pickTranslationJob();
         if (translationJobId === null) {
           const name = await appState.dialogs.prompt({
@@ -646,12 +757,12 @@ const initializeSmartlingPlugin = async () => {
         } else if (translationJobId) {
           // adding content to an already created job
           await api.updateBatchTranslation(translationJobId, [content]);
-          
+
           // For changed content that was previously published, update translation file in Smartling
           const translationRevision = content.meta?.get('translationRevision');
           const translationRevisionLatest = content.meta?.get('translationRevisionLatest');
           const isChangedPublishedContent = content.published === 'published' && translationRevision && translationRevisionLatest && translationRevision !== translationRevisionLatest;
-          
+
           if (isChangedPublishedContent) {
             try {
               await api.updateTranslationFile({
@@ -672,14 +783,14 @@ const initializeSmartlingPlugin = async () => {
           translationJobId,
           translationBy: pkg.name,
         };
-        
+
         // If content has changes (different revisions), update revision to latest
         const translationRevision = content.meta?.get('translationRevision');
         const translationRevisionLatest = content.meta?.get('translationRevisionLatest');
         if (translationRevision && translationRevisionLatest && translationRevision !== translationRevisionLatest) {
           metaUpdates.translationRevision = translationRevisionLatest;
         }
-        
+
         await appState.updateLatestDraft({
           id: content.id,
           modelId: content.modelId,

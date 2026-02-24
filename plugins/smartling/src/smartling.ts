@@ -558,19 +558,40 @@ export class SmartlingApi {
                }
 
                // Fallback to v1 local job creation
-               const localJob = await this.createLocalJobWithSymbols(jobName, [variantContent]);
+              const localJob = await this.createLocalJobWithSymbols(jobName, [variantContent]);
 
-               // Store variant metadata in the job
-               const jobDraft = await appState.getLatestDraft(localJob.id);
-               jobDraft.data = jobDraft.data || {};
-               jobDraft.data.variantMetadata = variantContent.variantMetadata;
-               await appState.updateLatestDraft(jobDraft);
+              // Store variant metadata and auto-populate jobDetails with variant's target locales
+              const jobDraft = await appState.getLatestDraft(localJob.id);
+              jobDraft.data = jobDraft.data || {};
+              jobDraft.data.variantMetadata = variantContent.variantMetadata;
 
-               createdJobs.push({
-                 variantIndex: variant.index,
-                 jobId: localJob.id,
-                 jobName,
-               });
+              // Auto-populate jobDetails with variant's target locales and project
+              jobDraft.data.jobDetails = jobDraft.data.jobDetails || {};
+
+              // Set target locales from variant
+              if (variant.targetLocales && variant.targetLocales.length > 0) {
+                jobDraft.data.jobDetails.targetLocales = variant.targetLocales;
+              }
+
+              // Set project from jobDetails or get default from plugin settings
+              if (jobDetails?.project) {
+                jobDraft.data.jobDetails.project = jobDetails.project;
+              } else {
+                // Get default project from plugin settings
+                const pluginSettings = appState.user.organization?.value?.settings?.plugins?.get(pkg.name);
+                const defaultProjectId = pluginSettings?.get('defaultProjectId');
+                if (defaultProjectId) {
+                  jobDraft.data.jobDetails.project = defaultProjectId;
+                }
+              }
+
+              await appState.updateLatestDraft(jobDraft);
+
+              createdJobs.push({
+                variantIndex: variant.index,
+                jobId: localJob.id,
+                jobName,
+              });
              } catch (error) {
                console.error(`Failed to create translation job for variant ${variant.index}:`, error);
                // Continue with other variants even if one fails

@@ -199,7 +199,6 @@ export function createVariantContent(
       variantMetadata: {
         originalContentId: contentItem.id,
         variantIndex,
-        variantName: variant.name,
         targetLocales: variant.targetLocales,
       },
     },

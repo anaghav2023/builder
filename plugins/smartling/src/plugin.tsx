@@ -708,6 +708,7 @@ const initializeSmartlingPlugin = async () => {
         // Content has no translation status, allow adding
         return true;
       },
+
       async onClick(content) {
         const translationModel = getTranslationModel();
         if (!translationModel) {
@@ -721,27 +722,6 @@ const initializeSmartlingPlugin = async () => {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
-        // Check if content has PersonalizationContainer variants
-        const containers = await detectPersonalizationContainers(content, appState.user.apiKey);
-        console.log('log1', containers)
-
-        if (containers.length > 0) {
-          // Handle variant job creation for this single content item
-          try {
-            const variantJobs = await handleVariantJobCreation([content]);
-
-            if (variantJobs.length > 0) {
-              appState.snackBar.show(`Created ${variantJobs.length} translation job(s) for variant(s)`);
-            }
-            return;
-          } catch (error) {
-            appState.snackBar.show('Failed to create variant translation jobs');
-            console.error('Variant job creation error:', error);
-            return;
-          }
-        }
-
-        // Handle regular content without variants
         let translationJobId = await pickTranslationJob();
         if (translationJobId === null) {
           const name = await appState.dialogs.prompt({
@@ -751,6 +731,34 @@ const initializeSmartlingPlugin = async () => {
             // Use enhanced job creation that supports both v1 and v2
             const localJob = await api.createTranslationJob(name, [content]);
             translationJobId = localJob.id;
+              // Check if content has PersonalizationContainer variants
+            const containers = await detectPersonalizationContainers(content, appState.user.apiKey);
+            console.log('log1', containers)
+
+            if (containers.length > 0) {
+              // Ask user if they want to create separate jobs for variants
+              const shouldCreateVariantJobs = await appState.dialogs.confirm({
+                message: 'Do you want to create a separate job for the variants?',
+                okText: 'Yes',
+                cancelText: 'No',
+              });
+
+              if (shouldCreateVariantJobs) {
+                // Handle variant job creation for this single content item
+                try {
+                  const variantJobs = await handleVariantJobCreation([content]);
+
+                  if (variantJobs.length > 0) {
+                    appState.snackBar.show(`Created ${variantJobs.length} translation job(s) for variant(s)`);
+                  }
+                  return;
+                } catch (error) {
+                  appState.snackBar.show('Failed to create variant translation jobs');
+                  console.error('Variant job creation error:', error);
+                  return;
+                }
+              }
+            }
           } else {
             return;
           }

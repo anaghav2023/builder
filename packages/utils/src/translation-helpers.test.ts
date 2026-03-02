@@ -1,5 +1,10 @@
 import { BuilderContent } from '@builder.io/sdk';
-import { applyTranslation, getTranslateableFields, localizedType } from './translation-helpers';
+import {
+  applyTranslation,
+  getTranslateableFields,
+  getTranslateableFieldsForVariant,
+  localizedType,
+} from './translation-helpers';
 
 test('getTranslateableFields from content to match snapshot', async () => {
   const content: BuilderContent = {
@@ -967,4 +972,158 @@ test('applyTranslation for symbol with localized array containing nested localiz
   // Original Default values should still be preserved
   expect(symbolData.uspList.Default[0].headline.Default).toBe('Accept card payments');
   expect(symbolData.uspList.Default[1].headline.Default).toBe('Organise your items');
+});
+
+test('getTranslateableFieldsForVariant should extract only variant-specific blocks from PersonalizationContainer', async () => {
+  // This test covers the scenario where:
+  // 1. A page has a text block outside the variant container
+  // 2. A PersonalizationContainer with multiple variants (default and variant1)
+  // 3. getTranslateableFieldsForVariant should return ONLY the blocks from variant1
+  const content: BuilderContent = {
+    data: {
+      url: '/p-1',
+      themeId: false,
+      title: 'p1',
+      blocks: [
+        // Block OUTSIDE the variant container - should NOT be included
+        {
+          '@type': '@builder.io/sdk:Element',
+          id: 'builder-bf9efe7542f34e528d676f77c08a3138',
+          component: {
+            name: 'Text',
+            options: {
+              text: '<p>Good Evening</p>',
+            },
+          },
+        },
+        // PersonalizationContainer with two variants
+        {
+          '@type': '@builder.io/sdk:Element',
+          id: 'builder-personalization-container-123',
+          component: {
+            name: 'PersonalizationContainer',
+            options: {
+              variants: [
+                // variant1 (index 0) - should be extracted
+                {
+                  name: 'variant1',
+                  query: [
+                    {
+                      '@type': '@builder.io/core:Query',
+                      property: 'locale',
+                      operator: 'is',
+                      value: ['fr-FR', 'es-ES'],
+                    },
+                  ],
+                  blocks: [
+                    {
+                      '@type': '@builder.io/sdk:Element',
+                      id: 'builder-ec6576bda43344acb0778cb19820764c',
+                      component: {
+                        name: 'Text',
+                        options: {
+                          text: 'This is from variant1',
+                        },
+                      },
+                    },
+                  ],
+                },
+                // default variant (index 1) - should NOT be extracted
+                {
+                  name: 'default',
+                  query: [],
+                  blocks: [
+                    {
+                      '@type': '@builder.io/sdk:Element',
+                      id: 'builder-a5617f990a104b738231fd17f8351377',
+                      component: {
+                        name: 'Text',
+                        options: {
+                          text: 'This is from default',
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ],
+    },
+  };
+
+  const variantMetadata = {
+    variantIndex: 0,
+    targetLocales: ['fr-FR', 'es-ES'],
+    originalContentId: 'a005d46d3dfd4128ba141ab79314243c',
+    // Note: blocks is NOT provided - function should extract it automatically
+  };
+
+  const result = getTranslateableFieldsForVariant(content, variantMetadata, 'en-US', '');
+
+  // Should ONLY contain the text from variant1
+  expect(Object.keys(result)).toHaveLength(1);
+  expect(result['blocks.builder-ec6576bda43344acb0778cb19820764c#text']).toEqual({
+    value: 'This is from variant1',
+    instructions: '',
+  });
+
+  // Should NOT contain text from outside the container
+  expect(result['blocks.builder-bf9efe7542f34e528d676f77c08a3138#text']).toBeUndefined();
+
+  // Should NOT contain text from the default variant
+  expect(result['blocks.builder-a5617f990a104b738231fd17f8351377#text']).toBeUndefined();
+});
+
+test('getTranslateableFieldsForVariant should work when blocks are provided in variantMetadata', async () => {
+  // This test ensures backward compatibility - when blocks are explicitly provided
+  // in variantMetadata, they should be used directly
+  const content: BuilderContent = {
+    data: {
+      blocks: [
+        {
+          '@type': '@builder.io/sdk:Element',
+          id: 'should-not-be-included',
+          component: {
+            name: 'Text',
+            options: {
+              text: 'This should not be included',
+            },
+          },
+        },
+      ],
+    },
+  };
+
+  const variantMetadata = {
+    variantIndex: 0,
+    targetLocales: ['fr-FR'],
+    originalContentId: 'test-content-id',
+    // Explicitly providing blocks
+    blocks: [
+      {
+        '@type': '@builder.io/sdk:Element',
+        id: 'explicitly-provided-block',
+        component: {
+          name: 'Text',
+          options: {
+            text: 'Explicitly provided text',
+          },
+        },
+      },
+    ],
+  };
+
+  const result = getTranslateableFieldsForVariant(content, variantMetadata, 'en-US', '');
+
+  // Should use the explicitly provided blocks
+  expect(Object.keys(result)).toHaveLength(1);
+  expect(result['blocks.explicitly-provided-block#text']).toEqual({
+    value: 'Explicitly provided text',
+    instructions: '',
+  });
+
+  // Should NOT use blocks from content.data.blocks
+  expect(result['blocks.should-not-be-included#text']).toBeUndefined();
 });

@@ -195,6 +195,81 @@ function resolveTranslation({
   }
 }
 
+export interface VariantMetadata {
+  originalContentId?: string;
+  variantIndex?: number;
+  targetLocales?: string[];
+  blocks?: any[];
+}
+
+/**
+ * Extract variant blocks from PersonalizationContainer
+ * @param blocks - The content blocks array
+ * @param variantIndex - The index of the variant to extract
+ * @returns The variant's blocks or undefined if not found
+ */
+function extractVariantBlocksFromPersonalizationContainer(
+  blocks: any[] | undefined,
+  variantIndex: number
+): any[] | undefined {
+  if (!blocks || !Array.isArray(blocks)) {
+    return undefined;
+  }
+
+  for (const block of blocks) {
+    if (block?.component?.name === 'PersonalizationContainer') {
+      const variants = block?.component?.options?.variants || [];
+      if (variants[variantIndex]) {
+        return variants[variantIndex].blocks;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract translatable fields for a specific variant.
+ * This function creates a variant-specific content object and extracts only the translatable
+ * fields from that variant's blocks.
+ *
+ * @param content - The original content or variant-specific content
+ * @param variantMetadata - Metadata about the variant, including blocks if available
+ * @param sourceLocaleId - The source locale ID to extract translations from
+ * @param defaultInstructions - Default translation instructions
+ * @returns TranslateableFields object containing only variant-specific translatable content
+ */
+export function getTranslateableFieldsForVariant(
+  content: BuilderContent,
+  variantMetadata: VariantMetadata,
+  sourceLocaleId: string,
+  defaultInstructions: string
+): TranslateableFields {
+  // Determine which blocks to use
+  let blocksToUse = variantMetadata.blocks;
+
+  // If blocks not provided in variantMetadata, try to extract from PersonalizationContainer
+  if (!blocksToUse && variantMetadata.variantIndex !== undefined) {
+    blocksToUse = extractVariantBlocksFromPersonalizationContainer(
+      content.data?.blocks,
+      variantMetadata.variantIndex
+    );
+  }
+
+  // Create a variant-specific content object
+  const variantContent: BuilderContent = {
+    ...content,
+    data: {
+      ...content.data,
+      // Use the determined blocks
+      blocks: blocksToUse,
+    },
+  };
+
+  // Extract translatable fields from the variant content
+  return getTranslateableFields(variantContent, sourceLocaleId, defaultInstructions);
+}
+
 export function getTranslateableFields(
   content: BuilderContent,
   sourceLocaleId: string,

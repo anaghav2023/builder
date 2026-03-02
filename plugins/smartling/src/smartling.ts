@@ -514,17 +514,16 @@ export class SmartlingApi {
 
                // Create variant-specific content
                const variantContent = {
-                 id: variant.originalContent?.id || contentId,
-                 modelName: variant.originalContent?.modelName || 'page',
-                 previewUrl: variant.originalContent?.previewUrl || variant.originalContent?.meta?.get?.('lastPreviewUrl'),
-                 blocks: variant.blocks,
-                 variantMetadata: {
-                   originalContentId: contentId,
-                   variantIndex: variant.index,
-                   variantName: variant.name,
-                   targetLocales: variant.targetLocales,
-                 },
-               };
+                id: variant.originalContent?.id || contentId,
+                modelName: variant.originalContent?.modelName || 'page',
+                previewUrl: variant.originalContent?.previewUrl || variant.originalContent?.meta?.get?.('lastPreviewUrl'),
+                blocks: variant.blocks,
+                variantMetadata: {
+                  originalContentId: contentId,
+                  variantIndex: variant.index,
+                  targetLocales: variant.targetLocales,
+                },
+              };
 
                // Try v2 Batch API first if available
                if (this.apiVersion === 'v2' && jobDetails) {
